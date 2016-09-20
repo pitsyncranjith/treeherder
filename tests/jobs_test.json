@@ -56,7 +56,13 @@
             "host_type": "master_host"
         },
         "result_set_ids": {
-            "sql": "SELECT `id`, `push_timestamp`, `revision_hash`, `long_revision`, `short_revision` FROM `result_set`",
+            "sql": "SELECT `id`,
+                           `push_timestamp`,
+                           `revision_hash`,
+                           `long_revision`,
+                           `short_revision`,
+                           `author`
+                    FROM `result_set`",
             "host_type": "master_host"
         },
         "result_sets": {

@@ -120,7 +120,6 @@ def test_missing_resultsets(jm, sample_data, sample_resultset, test_repository,
         resultset = result_set_skeletons[rev]
         assert resultset["short_revision"] == rev[:12]
         assert resultset["author"] == "pending..."
-        assert resultset["push_timestamp"] == 0
 
     jm.store_result_set_data(resultsets_to_store_after)
 
@@ -133,7 +132,7 @@ def test_missing_resultsets(jm, sample_data, sample_resultset, test_repository,
 
     assert len(updated_resultsets) == len(missing_revisions)
     for rs in updated_resultsets:
-        assert rs["push_timestamp"] > 0
+        assert rs["author"] != "pending..."
         assert len(rs["revisions"]) > 0
     act_revisions = {x["revision"] for x in updated_resultsets}
     assert set(missing_revisions).issubset(act_revisions)

@@ -792,7 +792,7 @@ into chunks of chunk_size size. Returns the number of result sets deleted"""
             for new_rev in missing_revisions:
                 result_sets.append({
                     "revision": new_rev,
-                    "push_timestamp": 0,
+                    "push_timestamp": time.time(),
                     "author": "pending...",
                     "revisions": []
                 })
@@ -1831,7 +1831,7 @@ into chunks of chunk_size size. Returns the number of result sets deleted"""
         # to be updated.
         rs_need_update = set()
         for rev, resultset in resultsets_before.items():
-            if resultset["push_timestamp"] == 0 or \
+            if resultset["author"] == "pending..." or \
                len(resultset["long_revision"]) < 40:
                 rs_need_update.add(rev)
 

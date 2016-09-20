@@ -469,7 +469,7 @@
 
         },
         "get_resultset_top_revision_lookup":{
-            "sql":"SELECT `id`, `short_revision`, `long_revision`, `revision_hash`, `push_timestamp`
+            "sql":"SELECT `id`, `short_revision`, `long_revision`, `revision_hash`, `push_timestamp`, `author`
                    FROM `result_set`
                    WHERE `active_status` in ('active', 'onhold')
                    REP0",

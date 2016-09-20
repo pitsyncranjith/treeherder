@@ -790,12 +790,16 @@ into chunks of chunk_size size. Returns the number of result sets deleted"""
         if missing_revisions:
             result_sets = []
             for new_rev in missing_revisions:
-                result_sets.append({
+                resultset = {
                     "revision": new_rev,
                     "push_timestamp": time.time(),
                     "author": "pending...",
                     "revisions": []
-                })
+                }
+                result_sets.append(resultset)
+                newrelic.agent.record_custom_event(
+                    "skeleton_created", params=resultset)
+
             self.store_result_set_data(result_sets)
 
             new_lookup = self.get_resultset_top_revision_lookup(missing_revisions)
@@ -1028,6 +1032,12 @@ into chunks of chunk_size size. Returns the number of result sets deleted"""
         self.set_lower_tier_signatures()
 
         reference_data_signatures = set()
+        if data:
+            # all the jobs in this batch will be from the same build_system
+            newrelic.agent.add_custom_parameter(
+                "build_system_type",
+                data[0]["build_system_type"])
+
         for datum in data:
             try:
                 # TODO: this might be a good place to check the datum against
@@ -1745,7 +1755,8 @@ into chunks of chunk_size size. Returns the number of result sets deleted"""
 
         # revision data structures
         revision_placeholders = []
-        all_revisions = []
+        update_revisions = []
+        insert_revisions = []
         rev_where_in_list = []
 
         # revision_map structures
@@ -1770,7 +1781,7 @@ into chunks of chunk_size size. Returns the number of result sets deleted"""
         self._modify_resultsets(resultset_updates,
                                 "jobs.updates.update_result_set",
                                 revision_placeholders,
-                                all_revisions, rev_where_in_list,
+                                update_revisions, rev_where_in_list,
                                 revision_to_rs_revision_lookup)
 
         # INSERT any resultsets we don't already have
@@ -1782,7 +1793,7 @@ into chunks of chunk_size size. Returns the number of result sets deleted"""
         self._modify_resultsets(resultset_inserts,
                                 "jobs.inserts.set_result_set",
                                 revision_placeholders,
-                                all_revisions, rev_where_in_list,
+                                insert_revisions, rev_where_in_list,
                                 revision_to_rs_revision_lookup)
 
         last_row_id = self.get_dhub().connection['master_host']['cursor'].lastrowid
@@ -1815,6 +1826,7 @@ into chunks of chunk_size size. Returns the number of result sets deleted"""
         # are just skipped.  This will insert revisions for both new
         # resultsets and resultset skeletons that were just updated.
         # Resultset skeletons don't get revisions till we insert them here.
+        all_revisions = update_revisions + insert_revisions
         revision_id_lookup = self._insert_revisions(
             revision_placeholders, all_revisions, rev_where_in_list,
             revision_to_rs_revision_lookup, result_set_id_lookup)
@@ -1831,9 +1843,13 @@ into chunks of chunk_size size. Returns the number of result sets deleted"""
         # to be updated.
         rs_need_update = set()
         for rev, resultset in resultsets_before.items():
-            if resultset["author"] == "pending..." or \
-               len(resultset["long_revision"]) < 40:
+            if (resultset["author"] == "pending..." or
+                    len(resultset["long_revision"]) < 40):
+
                 rs_need_update.add(rev)
+                newrelic.agent.record_custom_event(
+                    "resultset_to_be updated",
+                    params=resultset)
 
         # collect the new values for the resultsets that needed updating
         # The revision ingested earlier that needs update could be either

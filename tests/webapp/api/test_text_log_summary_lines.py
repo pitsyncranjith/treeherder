@@ -3,6 +3,7 @@ from rest_framework.test import APIClient
 
 from treeherder.model.models import (BugJobMap,
                                      FailureLine,
+                                     Job,
                                      JobNote,
                                      TextLogSummary)
 
@@ -135,10 +136,10 @@ def test_put_verify_job(webapp, jm, text_summary_lines, test_user, failure_class
     client = APIClient()
     client.force_authenticate(user=test_user)
 
-    job = jm.get_job(1)[0]
-    FailureLine.objects.filter(job_guid=job["job_guid"]).update(best_is_verified=True)
+    job = Job.objects.get(id=1)
+    FailureLine.objects.filter(job_guid=job.guid).update(best_is_verified=True)
 
-    text_summary_lines = TextLogSummary.objects.filter(job_guid=job["job_guid"]).get().lines.all()
+    text_summary_lines = TextLogSummary.objects.filter(job_guid=job.guid).get().lines.all()
     assert len(text_summary_lines) > 0
     data = [{"id": item.id, "bug_number": i + 1, "verified": True} for
             i, item in enumerate(text_summary_lines)]
@@ -148,12 +149,12 @@ def test_put_verify_job(webapp, jm, text_summary_lines, test_user, failure_class
 
     assert resp.status_code == 200
 
-    assert jm.is_fully_verified(1)
+    assert job.is_fully_verified()
 
-    bug_job_items = BugJobMap.objects.filter(job__project_specific_id=1)
+    bug_job_items = BugJobMap.objects.filter(job=job)
     assert {item.bug_id for item in bug_job_items} == set(range(1, len(text_summary_lines) + 1))
     assert all(item.user == test_user for item in bug_job_items)
 
-    note = JobNote.objects.filter(job__project_specific_id=1).get()
+    note = JobNote.objects.filter(job=job).get()
     assert note.user == test_user
     assert note.failure_classification.name == "intermittent"

@@ -13,11 +13,13 @@ from treeherder.model.models import (BugJobMap,
                                      ClassifiedFailure,
                                      FailureMatch,
                                      Job,
-                                     JobNote)
+                                     JobNote,
+                                     TextLogError,
+                                     TextLogStep)
 
 from .utils import (crash_line,
-                    create_bug_suggestions,
                     create_failure_lines,
+                    create_text_log_errors,
                     log_line,
                     register_detectors,
                     register_matchers,
@@ -92,20 +94,18 @@ def test_autoclassify_update_job_classification(activate_responses, jm, test_rep
                                                 failure_lines, classified_failures,
                                                 mock_autoclassify_jobs_true):
     ds_job = jm.get_job(2)[0]
+    job = Job.objects.get(project_specific_id=ds_job["id"])
 
     for i, item in enumerate(classified_failures):
         item.bug_number = "1234%i" % i
         item.save()
 
-    create_bug_suggestions(ds_job, test_project, {"search": "TEST-UNEXPECTED-FAIL | test1 | message1"})
-
     test_failure_lines = create_failure_lines(test_repository,
-                                              ds_job["job_guid"],
+                                              job.guid,
                                               [(test_line, {})])
 
+    create_text_log_errors(test_repository.name, job.project_specific_id, [(test_line, {})])
     autoclassify(jm, ds_job, test_failure_lines, [PreciseTestMatcher])
-
-    job = Job.objects.get(project_specific_id=ds_job["id"])
 
     assert JobNote.objects.filter(job=job).count() == 1
 
@@ -117,18 +117,25 @@ def test_autoclassify_no_update_job_classification(activate_responses, jm, test_
                                                    test_project, eleven_jobs_stored,
                                                    failure_lines, classified_failures):
     ds_job = jm.get_job(2)[0]
+    job = Job.objects.get(guid=ds_job['job_guid'])
 
-    create_bug_suggestions(ds_job, test_project,
-                           {"search": "TEST-UNEXPECTED-FAIL | test1 | message1"},
-                           {"search": "Some error that isn't in the structured logs"})
-
+    step = TextLogStep.objects.create(job=job,
+                                      name='unnamed step',
+                                      started_line_number=1,
+                                      finished_line_number=10,
+                                      result=TextLogStep.TEST_FAILED)
+    TextLogError.objects.create(step=step,
+                                line='TEST-UNEXPECTED-FAIL | test1 | message1',
+                                line_number=1)
+    TextLogError.objects.create(step=step,
+                                line="Some error that isn't in the structured logs",
+                                line_number=2)
     test_failure_lines = create_failure_lines(test_repository,
-                                              ds_job["job_guid"],
+                                              job.guid,
                                               [(test_line, {})])
 
     autoclassify(jm, ds_job, test_failure_lines, [PreciseTestMatcher])
 
-    job = Job.objects.get(project_specific_id=ds_job["id"])
     assert JobNote.objects.filter(job=job).count() == 0
 
 
@@ -138,15 +145,15 @@ def test_autoclassified_after_manual_classification(activate_responses, jm, test
     register_detectors(ManualDetector, TestFailureDetector)
 
     ds_job = jm.get_job(2)[0]
+    job = Job.objects.get(guid=ds_job['job_guid'])
 
-    create_bug_suggestions(ds_job, test_project, {"search": "TEST-UNEXPECTED-FAIL | test1 | message1"})
-
+    create_text_log_errors(test_repository.name, job.project_specific_id,
+                           [(test_line, {})])
     test_failure_lines = create_failure_lines(test_repository,
-                                              ds_job["job_guid"],
+                                              job.guid,
                                               [(test_line, {})])
 
-    JobNote.objects.create(job=Job.objects.get(repository=test_repository,
-                                               project_specific_id=ds_job["id"]),
+    JobNote.objects.create(job=job,
                            failure_classification_id=4,
                            user=test_user,
                            text="")
@@ -166,9 +173,6 @@ def test_autoclassified_no_update_after_manual_classification_1(activate_respons
     register_detectors(ManualDetector, TestFailureDetector)
 
     ds_job = jm.get_job(2)[0]
-
-    create_bug_suggestions(ds_job, test_project,
-                           {"search": "TEST-UNEXPECTED-FAIL | test1 | message1"})
 
     # Line type won't be detected by the detectors we have registered
     test_failure_lines = create_failure_lines(test_repository,
@@ -200,8 +204,6 @@ def test_autoclassified_no_update_after_manual_classification_2(activate_respons
                                               ds_job["job_guid"],
                                               [(log_line, {}),
                                                (test_line, {"subtest": "subtest2"})])
-
-    create_bug_suggestions(ds_job, test_project, {"search": "TEST-UNEXPECTED-FAIL | test1 | message1"})
 
     JobNote.objects.create(job=Job.objects.get(repository=test_repository,
                                                project_specific_id=ds_job["id"]),

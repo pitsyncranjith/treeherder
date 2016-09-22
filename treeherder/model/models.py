@@ -2,11 +2,13 @@ from __future__ import unicode_literals
 
 import datetime
 import itertools
+import logging
 import os
 import time
 from collections import (OrderedDict,
                          defaultdict)
 from hashlib import sha1
+from itertools import chain
 from warnings import (filterwarnings,
                       resetwarnings)
 
@@ -35,6 +37,8 @@ from .search import (TestFailureLine,
 SOURCES_CACHE_KEY = "treeherder-datasources"
 
 SQL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sql')
+
+logger = logging.getLogger(__name__)
 
 
 @python_2_unicode_compatible
@@ -585,6 +589,108 @@ class Job(models.Model):
         db_table = 'job'
         unique_together = ('repository', 'project_specific_id')
 
+    def is_fully_autoclassified(self):
+        """
+        Returns whether a job is fully autoclassified (i.e. we have
+        classification information for all failure lines)
+        """
+        if FailureLine.objects.filter(job_guid=self.guid,
+                                      action="truncated").count() > 0:
+            return False
+
+        classified_failure_lines_count = FailureLine.objects.filter(
+            best_classification__isnull=False,
+            job_guid=self.guid).count()
+
+        if classified_failure_lines_count == 0:
+            return False
+
+        # FIXME: not sure whether this belongs here
+        from treeherder.model.error_summary import get_filtered_error_lines
+
+        return classified_failure_lines_count == len(get_filtered_error_lines(self))
+
+    def is_fully_verified(self):
+        if FailureLine.objects.filter(job_guid=self.guid,
+                                      action="truncated").count() > 0:
+            logger.error("Job %s truncated storage of FailureLines" % self.guid)
+            return False
+
+        # Line is not fully verified if there are either structured failure lines
+        # with no best failure, or unverified unstructured lines not associated with
+        # a structured line
+
+        unverified_failure_lines = FailureLine.objects.filter(
+            best_is_verified=False,
+            job_guid=self.guid).count()
+
+        if unverified_failure_lines:
+            logger.error("Job %s has unverified FailureLines" % self.guid)
+            return False
+
+        unverified_text_lines = TextLogSummaryLine.objects.filter(
+            verified=False,
+            failure_line=None,
+            summary__job_guid=self.guid).count()
+
+        if unverified_text_lines:
+            logger.error("Job %s has unverified TextLogSummary" % self.guid)
+            return False
+
+        logger.info("Job %s is fully verified" % self.guid)
+        return True
+
+    def update_after_verification(self, user):
+        """
+        Updates a job's state after being verified by a sheriff
+        """
+        if self.is_fully_verified():
+            existing_notes = JobNote.objects.filter(job=self)
+            autoclassification = FailureClassification.objects.get(
+                name="autoclassified intermittent")
+            # We don't want to add a job note after an autoclassification if
+            # there is already one and after a verification if there is
+            # already one not supplied by the autoclassifier
+            for note in existing_notes:
+                if note.failure_classification != autoclassification:
+                    return
+            JobNote.objects.create_autoclassify_job_note(self, user=user)
+
+    def get_manual_classification_line(self):
+        """
+        Return the FailureLine from a job if it can be manually classified as a side effect
+        of the overall job being classified.
+        Otherwise return None.
+        """
+        try:
+            failure_lines = [FailureLine.objects.get(job_guid=self.guid)]
+        except (FailureLine.DoesNotExist, FailureLine.MultipleObjectsReturned):
+            return None
+
+        # Only propagate the classification if there is exactly one unstructured failure
+        # line for the job
+        from treeherder.model.error_summary import get_filtered_error_lines
+        if len(get_filtered_error_lines(self)) != 1:
+            return None
+
+        # Check that some detector would match this. This is being used as an indication
+        # that the autoclassifier will be able to work on this classification
+        if not any(detector(failure_lines)
+                   for detector in Matcher.objects.registered_detectors()):
+            return None
+
+        return failure_lines[0]
+
+    def update_autoclassification_bug(self, bug_number):
+        failure_line = self.get_manual_classification_line()
+
+        if failure_line is None:
+            return
+
+        classification = failure_line.best_classification
+        if classification and classification.bug_number is None:
+            return classification.set_bug(bug_number)
+
     def __str__(self):
         return "{0} {1} {2} {3}".format(self.id, self.repository, self.guid,
                                         self.project_specific_id)
@@ -702,14 +808,55 @@ class BugJobMap(models.Model):
 
             # if we have a user, then update the autoclassification relations
             if self.user:
-                jm.update_autoclassification_bug(self.job.project_specific_id,
-                                                 self.bug_id)
+                self.job.update_autoclassification_bug(self.bug_id)
 
     def __str__(self):
         return "{0} {1} {2} {3}".format(self.id,
                                         self.job.guid,
                                         self.bug_id,
                                         self.user)
+
+
+class JobNoteManager(models.Manager):
+    '''
+    Convenience functions for creating / modifying groups of job notes
+    '''
+    def create_autoclassify_job_note(self, job, user=None):
+
+        # Only insert bugs for verified failures since these are automatically
+        # mirrored to ES and the mirroring can't be undone
+        classified_failures = ClassifiedFailure.objects.filter(
+            best_for_lines__job_guid=job.guid,
+            best_for_lines__best_is_verified=True)
+
+        text_log_summary_lines = TextLogSummaryLine.objects.filter(
+            summary__job_guid=job.guid, verified=True).exclude(
+                bug_number=None)
+
+        bug_numbers = {item.bug_number
+                       for item in chain(classified_failures,
+                                         text_log_summary_lines)
+                       if item.bug_number}
+
+        for bug_number in bug_numbers:
+            BugJobMap.objects.get_or_create(job=job,
+                                            bug_id=bug_number,
+                                            defaults={
+                                                'user': user
+                                            })
+
+        # if user is not specified, then this is an autoclassified job note
+        # and we should mark it as such
+        if user is None:
+            classification = FailureClassification.objects.get(
+                name="autoclassified intermittent")
+        else:
+            classification = FailureClassification.objects.get(name="intermittent")
+
+        return JobNote.objects.create(job=job,
+                                      failure_classification=classification,
+                                      user=user,
+                                      text="")
 
 
 class JobNote(models.Model):
@@ -725,6 +872,8 @@ class JobNote(models.Model):
     user = models.ForeignKey(User, null=True)  # null if autoclassified
     text = models.TextField()
     created = models.DateTimeField(default=timezone.now)
+
+    objects = JobNoteManager()
 
     class Meta:
         db_table = "job_note"
@@ -745,8 +894,7 @@ class JobNote(models.Model):
         if self.user:
             if self.failure_classification.name in [
                     "intermittent", "intermittent needs filing"]:
-                failure_line = jm.get_manual_classification_line(
-                    self.job.project_specific_id)
+                failure_line = self.job.get_manual_classification_line()
                 if failure_line:
                     failure_line.update_autoclassification()
 
@@ -898,16 +1046,11 @@ class FailureLine(models.Model):
         if not components:
             return []
 
-        # Importing this at the top level causes circular import misery
-        from treeherder.model.derived import JobsModel, ArtifactsModel
-        with JobsModel(self.repository.name) as jm, \
-                ArtifactsModel(self.repository.name) as am:
-            job_id = jm.get_job_ids_by_guid([self.job_guid])[self.job_guid]["id"]
-            bug_suggestions = am.filter_bug_suggestions(am.bug_suggestions(job_id))
-
+        from treeherder.model.error_summary import get_filtered_error_lines
+        job = Job.objects.get(guid=self.job_guid)
         rv = []
         ids_seen = set()
-        for item in bug_suggestions:
+        for item in get_filtered_error_lines(job):
             if all(component in item["search"] for component in components):
                 for suggestion in itertools.chain(item["bugs"]["open_recent"],
                                                   item["bugs"]["all_others"]):

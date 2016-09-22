@@ -151,6 +151,15 @@ def test_repository(transactional_db):
 
 
 @pytest.fixture
+def test_job(eleven_job_blobs, jm):
+    from treeherder.model.models import Job
+
+    jm.store_job_data(eleven_job_blobs[0:1])
+
+    return Job.objects.get(id=1)
+
+
+@pytest.fixture
 def mock_log_parser(monkeypatch):
     from celery import task
     from treeherder.log_parser import tasks
@@ -334,28 +343,11 @@ def pulse_action_consumer(request):
 
 
 @pytest.fixture
-def mock_error_summary(monkeypatch):
-    bs_obj = ["foo", "bar"]
-
-    from treeherder.model import error_summary
-
-    def _get_error_summary(params):
-        return bs_obj
-
-    monkeypatch.setattr(error_summary, "get_error_summary", _get_error_summary)
-
-    return bs_obj
-
-
-@pytest.fixture
-def failure_lines(jm, test_repository, eleven_jobs_stored, elasticsearch):
+def failure_lines(test_repository, test_job, elasticsearch):
     from tests.autoclassify.utils import test_line, create_failure_lines
 
-    test_repository.save()
-
-    job = jm.get_job(1)[0]
     return create_failure_lines(test_repository,
-                                job["job_guid"],
+                                test_job.guid,
                                 [(test_line, {}),
                                  (test_line, {"subtest": "subtest2"})])
 
@@ -391,20 +383,19 @@ def test_matcher(request):
 
 
 @pytest.fixture
-def classified_failures(request, jm, eleven_jobs_stored, failure_lines,
+def classified_failures(request, test_job, failure_lines,
                         test_matcher, failure_classifications):
     from treeherder.model.models import ClassifiedFailure
     from treeherder.model.search import refresh_all
 
-    job_1 = jm.get_job(1)[0]
-
     classified_failures = []
 
     for failure_line in failure_lines:
-        if failure_line.job_guid == job_1["job_guid"]:
+        if failure_line.job_guid == test_job.guid:
             classified_failure = ClassifiedFailure()
             classified_failure.save()
-            failure_line.set_classification(test_matcher.db_object, classified_failure,
+            failure_line.set_classification(test_matcher.db_object,
+                                            classified_failure,
                                             mark_best=True)
             classified_failures.append(classified_failure)
 

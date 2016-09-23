@@ -650,7 +650,6 @@ def test_new_job_in_exclusion_profile(jm, sample_data, sample_resultset, mock_lo
         job["revision"] = result_set_stored[0]["revision"]
 
     job = sample_data.job_data[1]
-
     platform = job["job"]["machine_platform"]["platform"]
     arch = job["job"]["machine_platform"]["architecture"]
 

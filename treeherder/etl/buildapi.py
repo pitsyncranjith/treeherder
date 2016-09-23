@@ -80,7 +80,8 @@ class Builds4hTransformerMixin(object):
     def transform(self, data, project_filter=None, revision_filter=None,
                   job_group_filter=None):
         """
-        transform the builds4h structure into something we can ingest
+        transform the builds4h structure into something we can ingest via
+        our restful api
         """
         revisions = defaultdict(list)
 

@@ -646,11 +646,10 @@ def test_remove_existing_jobs_one_existing_one_new(jm, sample_data,
 
 def test_new_job_in_exclusion_profile(jm, sample_data, sample_resultset, mock_log_parser,
                                       test_sheriff, test_project, result_set_stored):
-    job_data = copy.deepcopy(sample_data.job_data[:2])
-    for job in job_data:
+    for job in sample_data.job_data[:2]:
         job["revision"] = result_set_stored[0]["revision"]
 
-    job = job_data[1]
+    job = sample_data.job_data[1]
 
     platform = job["job"]["machine_platform"]["platform"]
     arch = job["job"]["machine_platform"]["architecture"]
@@ -671,7 +670,7 @@ def test_new_job_in_exclusion_profile(jm, sample_data, sample_resultset, mock_lo
         author=test_sheriff,
     )
     exclusion_profile.exclusions.add(job_exclusion)
-    jm.store_job_data(job_data)
+    jm.store_job_data(sample_data.job_data[:2])
     obtained = jm.get_job_list(offset=0, limit=100, exclusion_profile="Tier-2")
     # We check all the jobs applying the exclusion profile
     # If we find the excluded job, there is a problem
